@@ -12,9 +12,11 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncGenerator
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import get_settings
@@ -39,6 +41,7 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
 )
 logger = logging.getLogger("agentlend")
+BASE_DIR = Path(__file__).resolve().parent
 
 
 # ── Lifespan (startup / shutdown) ──────────────────────────────
@@ -85,7 +88,7 @@ app = FastAPI(
     title=settings.APP_NAME,
     description=(
         "Autonomous AI lending agent — analyses borrower wallets on-chain, "
-        "evaluates risk with Gemini LLM, and manages a treasury wallet on "
+        "evaluates risk with AWS Bedrock, and manages a treasury wallet on "
         "Ethereum Sepolia."
     ),
     version="0.1.0",
@@ -118,3 +121,18 @@ def health_check():
         "service": settings.APP_NAME,
         "version": "0.1.0",
     }
+
+
+@app.get("/", include_in_schema=False)
+def root_redirect():
+    return RedirectResponse(url="/ui", status_code=307)
+
+
+@app.get("/favicon.ico", include_in_schema=False)
+def favicon():
+    return Response(status_code=204)
+
+
+@app.get("/ui", include_in_schema=False)
+def test_ui():
+    return FileResponse(BASE_DIR / "static" / "test-ui.html")

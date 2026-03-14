@@ -69,12 +69,24 @@ def _wdk_request(method: str, path: str, **kwargs: Any) -> Optional[Dict]:
         resp.raise_for_status()
         return resp.json()
     except requests.RequestException as exc:
-        logger.error("WDK API error (%s %s): %s", method, path, exc)
+        logger.warning("WDK API unavailable (%s %s): %s", method, path, exc)
         return None
 
 
 def _wdk_available() -> bool:
-    return bool(settings.WDK_API_KEY)
+    key = (settings.WDK_API_KEY or "").strip()
+    if not key:
+        return False
+
+    lowered = key.lower()
+    placeholder_values = {
+        "dummy",
+        "your-wdk-api-key",
+        "your-wdk-api-key-here",
+        "changeme",
+        "replace-me",
+    }
+    return lowered not in placeholder_values
 
 
 # ══════════════════════════════════════════════════════════════════

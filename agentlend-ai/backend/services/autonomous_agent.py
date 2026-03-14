@@ -9,7 +9,7 @@ Each cycle the agent:
   2. For each pending loan:
      a. Analyze borrower wallet on-chain
      b. Compute / refresh credit score
-     c. Call Gemini risk evaluation
+     c. Call AI risk evaluation (AWS Bedrock)
      d. Log AI reasoning
      e. Approve or reject
      f. Execute blockchain transaction if approved
@@ -70,7 +70,7 @@ def _process_single_loan(db: Session, loan: Loan) -> None:
         )
         repayment_rate = user.repayment_rate if user else 0.0
 
-        # ── 3. Gemini risk evaluation ───────────────────────────
+        # ── 3. AI risk evaluation (AWS Bedrock) ─────────────────
         # Infer loan_duration from due_date or use default
         if loan.due_date:
             remaining = (loan.due_date - datetime.now(timezone.utc)).days

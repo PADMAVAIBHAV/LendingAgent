@@ -13,14 +13,15 @@ The raw result (0-1) is scaled to 0-850 (conventional credit-score range).
 from __future__ import annotations
 
 import logging
-import math
 from typing import Optional
 
 from sqlalchemy.orm import Session
 
+from config import get_settings
 from database.models import User
 
 logger = logging.getLogger(__name__)
+settings = get_settings()
 
 # ── Normalisation constants ──────────────────────────────────────
 # These cap the input so that extremely large values don't dominate.
@@ -43,6 +44,7 @@ def compute_credit_score(
     repayment_rate: float,
     wallet_age: float,
     transaction_count: int,
+    min_score: float = 0.0,
 ) -> float:
     """
     Compute a credit score in the range [0, 850].
@@ -62,7 +64,7 @@ def compute_credit_score(
     norm_tx = _normalise(float(transaction_count), float(MAX_TX_COUNT))
 
     raw = 0.5 * norm_repayment + 0.3 * norm_age + 0.2 * norm_tx
-    score = round(raw * SCORE_CEILING, 2)
+    score = round(max(raw * SCORE_CEILING, min_score), 2)
 
     logger.info(
         "Credit score computed → repay=%.2f, age_norm=%.2f, tx_norm=%.2f → score=%.2f",
@@ -97,7 +99,7 @@ def update_user_credit_score(
             wallet_address=wallet_address.lower(),
             wallet_age=wallet_age,
             transaction_count=transaction_count,
-            repayment_rate=0.0,
+            repayment_rate=settings.COLD_START_NEUTRAL_REPAYMENT_RATE,
         )
         db.add(user)
         db.flush()  # get user_id
@@ -106,10 +108,13 @@ def update_user_credit_score(
     user.wallet_age = wallet_age
     user.transaction_count = transaction_count
 
+    is_cold_start = wallet_age <= settings.COLD_START_MAX_WALLET_AGE_DAYS and transaction_count <= settings.COLD_START_MAX_TX_COUNT
+
     new_score = compute_credit_score(
         repayment_rate=user.repayment_rate,
         wallet_age=wallet_age,
         transaction_count=transaction_count,
+        min_score=settings.COLD_START_BASE_CREDIT_SCORE if is_cold_start else 0.0,
     )
     user.credit_score = new_score
     db.commit()

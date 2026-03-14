@@ -106,7 +106,7 @@ class DecisionLog(Base):
     risk_score = Column(Float, default=0.0)
     interest_rate = Column(Float, default=0.0)
     reason = Column(Text, nullable=True)
-    ai_explanation = Column(Text, nullable=True)            # Full Gemini reasoning
+    ai_explanation = Column(Text, nullable=True)            # Full AI model reasoning
     timestamp = Column(DateTime(timezone=True), default=_utcnow)
 
     # Relationships

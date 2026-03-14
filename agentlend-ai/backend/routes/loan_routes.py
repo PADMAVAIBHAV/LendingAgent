@@ -29,7 +29,7 @@ def request_loan(payload: LoanRequest, db: Session = Depends(get_db)):
     The system will:
     1. Analyze the borrower's on-chain wallet history
     2. Compute a credit score
-    3. Run Gemini AI risk evaluation
+    3. Run AI risk evaluation (AWS Bedrock)
     4. Log the AI decision with full reasoning
     5. Approve or reject the loan
     6. If approved, send funds on-chain via WDK / Web3

@@ -17,13 +17,41 @@ from config import get_settings
 from database.models import Loan, LoanStatus, User
 from database.schemas import RiskEvaluation, WalletAnalytics
 from services.onchain_analyzer import analyze_wallet
-from services.credit_score_service import compute_credit_score, update_user_credit_score
+from services.credit_score_service import update_user_credit_score
 from services.decision_logger import log_decision
 from ai_agent.risk_agent import evaluate_risk
 from blockchain.wdk_wallet import send_transaction
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+def _is_cold_start_candidate(
+    analytics: WalletAnalytics,
+    loan_amount: float,
+) -> bool:
+    if not settings.COLD_START_ENABLED:
+        return False
+
+    return (
+        loan_amount <= settings.COLD_START_MAX_LOAN_AMOUNT
+        and analytics.wallet_age <= settings.COLD_START_MAX_WALLET_AGE_DAYS
+        and analytics.transaction_count <= settings.COLD_START_MAX_TX_COUNT
+    )
+
+
+def _apply_cold_start_override(evaluation: RiskEvaluation) -> RiskEvaluation:
+    return RiskEvaluation(
+        risk_score=min(evaluation.risk_score, settings.COLD_START_RISK_SCORE),
+        decision="APPROVED",
+        interest_rate=max(evaluation.interest_rate, settings.COLD_START_INTEREST_RATE),
+        reason="Cold-start micro-loan policy applied for new wallet.",
+        ai_explanation=(
+            "Borrower has limited on-chain history, but qualifies for onboarding micro-credit. "
+            f"Approved within cold-start cap (≤ {settings.COLD_START_MAX_LOAN_AMOUNT} USDT) "
+            f"at {settings.COLD_START_INTEREST_RATE:.1f}% interest for trust building."
+        ),
+    )
 
 
 def process_loan_request(
@@ -37,7 +65,7 @@ def process_loan_request(
 
     1. Fetch wallet analytics (on-chain)
     2. Upsert user & compute credit score
-    3. Call Gemini risk agent
+    3. Call AI risk agent (AWS Bedrock)
     4. Log AI decision with reasoning
     5. If APPROVED → send funds on-chain via WDK/Web3
     6. Persist & return the Loan record
@@ -75,7 +103,7 @@ def process_loan_request(
     )
 
     # ── Step 3: AI risk evaluation ──────────────────────────────
-    logger.info("Step 3 — Running Gemini risk evaluation")
+    logger.info("Step 3 — Running AI risk evaluation (AWS Bedrock)")
     evaluation: RiskEvaluation = evaluate_risk(
         wallet_age=analytics.wallet_age,
         transaction_count=analytics.transaction_count,
@@ -85,13 +113,16 @@ def process_loan_request(
         credit_score=credit_score,
     )
 
+    if evaluation.decision == "REJECTED" and _is_cold_start_candidate(analytics, loan_amount):
+        logger.info(
+            "Cold-start override applied for wallet=%s amount=%.2f",
+            wallet_address,
+            loan_amount,
+        )
+        evaluation = _apply_cold_start_override(evaluation)
+
     # ── Step 4: Create loan record ──────────────────────────────
     due_date = datetime.now(timezone.utc) + timedelta(days=loan_duration)
-    status = (
-        LoanStatus.PENDING
-        if evaluation.decision == "APPROVED"
-        else LoanStatus.PENDING  # stays PENDING; will be ACTIVE after on-chain tx
-    )
 
     loan = Loan(
         borrower_wallet=wallet_address,

@@ -81,7 +81,7 @@ class DecisionLogResponse(BaseModel):
 # ── AI Risk Evaluation Result ───────────────────────────────────
 
 class RiskEvaluation(BaseModel):
-    """Structured response expected from the Gemini risk agent."""
+    """Structured response expected from the AI risk agent."""
     risk_score: float = Field(..., ge=0, le=100)
     decision: str = Field(..., pattern="^(APPROVED|REJECTED)$")
     interest_rate: float = Field(..., ge=0)

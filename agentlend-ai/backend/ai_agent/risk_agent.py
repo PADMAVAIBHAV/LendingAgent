@@ -1,7 +1,7 @@
 """
-AgentLend AI — Gemini Risk Agent
-=================================
-Uses Google Gemini to evaluate borrower risk and return a structured
+AgentLend AI — AWS Bedrock Risk Agent
+======================================
+Uses AWS Bedrock to evaluate borrower risk and return a structured
 lending decision (approve/reject + explanation).
 """
 
@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Optional
+from typing import Any, Dict
 
-import google.generativeai as genai
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 
 from config import get_settings
 from database.schemas import RiskEvaluation
@@ -19,14 +20,16 @@ from database.schemas import RiskEvaluation
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-# ── Configure Gemini SDK ─────────────────────────────────────────
+# ── Configure AWS Bedrock client ──────────────────────────────────
 
-genai.configure(api_key=settings.GEMINI_API_KEY)
+MODEL_ID = settings.AWS_BEDROCK_MODEL_ID or "amazon.nova-lite-v1:0"
 
-# Updated supported model
-MODEL_NAME = "gemini-1.5-pro-latest"
-
-_MODEL = genai.GenerativeModel(MODEL_NAME)
+_BEDROCK = boto3.client(
+    "bedrock-runtime",
+    region_name=settings.AWS_REGION,
+    aws_access_key_id=settings.AWS_ACCESS_KEY_ID or None,
+    aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY or None,
+)
 
 # ── System prompt ───────────────────────────────────────────────
 
@@ -63,6 +66,36 @@ Return ONLY the JSON object.
 """
 
 
+def _build_bedrock_payload(prompt: str) -> Dict[str, Any]:
+    return {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "text": prompt,
+                    }
+                ],
+            }
+        ],
+        "inferenceConfig": {
+            "temperature": 0.2,
+            "max_new_tokens": 400,
+        },
+    }
+
+
+def _extract_bedrock_text(response_body: Dict[str, Any]) -> str:
+    output = response_body.get("output", {})
+    message = output.get("message", {})
+    content = message.get("content", [])
+    for item in content:
+        text = item.get("text")
+        if text:
+            return text.strip()
+    return ""
+
+
 # ── Public API ──────────────────────────────────────────────────
 
 def evaluate_risk(
@@ -73,9 +106,7 @@ def evaluate_risk(
     loan_duration: int,
     credit_score: float,
 ) -> RiskEvaluation:
-    """
-    Call Gemini to evaluate borrower risk.
-    """
+    """Call AWS Bedrock to evaluate borrower risk."""
 
     prompt = f"""
 {SYSTEM_PROMPT}
@@ -92,21 +123,26 @@ Credit score: {credit_score:.1f}
 Return the decision as JSON.
 """
 
-    logger.info("Sending risk evaluation request to Gemini (loan=%.2f)", loan_amount)
+    logger.info(
+        "Sending risk evaluation request to AWS Bedrock model=%s (loan=%.2f)",
+        MODEL_ID,
+        loan_amount,
+    )
 
     try:
-
-        response = _MODEL.generate_content(
-            prompt,
-            generation_config=genai.GenerationConfig(
-                temperature=0.2,
-                max_output_tokens=400,
-            ),
+        response = _BEDROCK.invoke_model(
+            modelId=MODEL_ID,
+            contentType="application/json",
+            accept="application/json",
+            body=json.dumps(_build_bedrock_payload(prompt)),
         )
 
-        raw_text = response.text.strip()
+        body_stream = response.get("body")
+        decoded = body_stream.read().decode("utf-8") if body_stream else "{}"
+        parsed_body: Dict[str, Any] = json.loads(decoded)
+        raw_text = _extract_bedrock_text(parsed_body)
 
-        logger.debug("Gemini raw response: %s", raw_text)
+        logger.debug("Bedrock raw response: %s", raw_text)
 
         # Remove markdown code fences if present
         if raw_text.startswith("```"):
@@ -115,11 +151,29 @@ Return the decision as JSON.
             raw_text = raw_text.strip()
 
         result = json.loads(raw_text)
+        if not isinstance(result, dict):
+            raise ValueError("Bedrock response JSON is not an object")
 
-        evaluation = RiskEvaluation(**result)
+        risk_score = float(result.get("risk_score", 100.0) or 100.0)
+        decision = str(result.get("decision", "REJECTED") or "REJECTED").upper()
+        interest_rate_raw = result.get("interest_rate", 0.0)
+        interest_rate = float(interest_rate_raw or 0.0)
+        reason = str(result.get("reason", "No reason provided by model.") or "No reason provided by model.")
+        ai_explanation = str(
+            result.get("ai_explanation", "No explanation provided by model.")
+            or "No explanation provided by model."
+        )
+
+        evaluation = RiskEvaluation(
+            risk_score=risk_score,
+            decision=decision,
+            interest_rate=interest_rate,
+            reason=reason,
+            ai_explanation=ai_explanation,
+        )
 
         logger.info(
-            "Gemini decision → %s | risk=%.1f | rate=%.2f%%",
+            "Bedrock decision → %s | risk=%.1f | rate=%.2f%%",
             evaluation.decision,
             evaluation.risk_score,
             evaluation.interest_rate,
@@ -128,23 +182,23 @@ Return the decision as JSON.
         return evaluation
 
     except json.JSONDecodeError as exc:
-        logger.error("Failed to parse Gemini JSON response: %s", exc)
+        logger.error("Failed to parse Bedrock JSON response: %s", exc)
 
         return RiskEvaluation(
             risk_score=100.0,
             decision="REJECTED",
             interest_rate=0.0,
-            reason="AI evaluation failed — invalid JSON from LLM.",
+            reason="AI evaluation failed — invalid JSON from AWS model.",
             ai_explanation=f"Parsing error: {exc}",
         )
 
-    except Exception as exc:
-        logger.error("Gemini API call failed: %s", exc)
+    except (ClientError, BotoCoreError, Exception) as exc:
+        logger.error("AWS Bedrock API call failed: %s", exc)
 
         return RiskEvaluation(
             risk_score=100.0,
             decision="REJECTED",
             interest_rate=0.0,
-            reason="AI evaluation failed — Gemini API error.",
+            reason="AI evaluation failed — AWS Bedrock API error.",
             ai_explanation=f"API error: {exc}",
         )

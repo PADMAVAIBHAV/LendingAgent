@@ -1,7 +1,7 @@
 """
 AgentLend AI — Decision Logger
 ================================
-Persists every AI lending decision with full reasoning from Gemini.
+Persists every AI lending decision with full model reasoning.
 Creates an auditable trail of all approve / reject decisions.
 """
 
@@ -32,7 +32,7 @@ def log_decision(
     db             : active SQLAlchemy session
     wallet_address : borrower wallet
     loan_id        : associated loan (may be None for pre-screening)
-    evaluation     : structured Gemini AI output
+    evaluation     : structured AI model output
 
     Returns
     -------
