@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ChevronDown, Network, Wallet } from 'lucide-react';
 import SidebarNav from './SidebarNav';
+import { fetchTreasuryBalance } from '../lib/api';
 
 function HeaderChip({ children, className = '' }) {
   return (
@@ -14,6 +15,28 @@ export default function AppShell({ tabs, activeTab, onTabChange, children }) {
   const ethAddress = useMemo(() => 'f00285d2823...b4e9', []);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [desktopCollapsed, setDesktopCollapsed] = useState(false);
+  const [treasuryLabel, setTreasuryLabel] = useState('Loading...');
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function loadTreasury() {
+      try {
+        const treasury = await fetchTreasuryBalance();
+        if (!mounted) return;
+        const balance = Number(treasury?.balance_human || 0);
+        setTreasuryLabel(`$${balance.toLocaleString()}`);
+      } catch {
+        if (!mounted) return;
+        setTreasuryLabel('Unavailable');
+      }
+    }
+
+    loadTreasury();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   return (
     <div className="min-h-screen lg:flex">
@@ -49,7 +72,7 @@ export default function AppShell({ tabs, activeTab, onTabChange, children }) {
           <HeaderChip className="pr-3">
             <div className="leading-tight text-slate-200">
               <p className="text-[11px] text-slate-400">Treasury Balance</p>
-              <p className="text-[15px] font-semibold">$12,338,6TH</p>
+              <p className="text-[15px] font-semibold">{treasuryLabel}</p>
             </div>
           </HeaderChip>
 

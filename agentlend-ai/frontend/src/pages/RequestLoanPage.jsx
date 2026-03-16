@@ -1,28 +1,27 @@
 import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { ChevronDown, LoaderCircle } from 'lucide-react';
+import { CheckCircle2, ChevronDown, LoaderCircle } from 'lucide-react';
+import { requestLoan } from '../lib/api';
+import { toLoanDecisionLabel } from '../lib/loanStatus';
 
 const initialResult = {
-  creditScore: 302,
-  riskScore: 28,
+  creditScore: 0,
+  riskScore: 0,
   riskLevel: 'Low',
-  interestRate: 4.5,
-  decision: 'Approved',
+  interestRate: 0,
+  decision: 'Pending',
+  loanId: null,
+  transactionHash: null,
 };
 
-function evaluateRisk({ amount, duration, wallet }) {
-  const walletQuality = /^0x[a-fA-F0-9]{40}$/.test(wallet) ? 10 : -10;
-  const amountPenalty = Math.min(amount / 22, 30);
-  const durationPenalty = duration >= 60 ? 18 : duration >= 30 ? 10 : duration >= 14 ? 6 : 3;
-  const baseRisk = 24 + amountPenalty + durationPenalty - walletQuality;
-  const riskScore = Math.max(5, Math.min(95, Math.round(baseRisk)));
-  const creditScore = Math.max(300, Math.min(850, Math.round(850 - riskScore * 5.8)));
-  const riskLevel = riskScore <= 35 ? 'Low' : riskScore <= 65 ? 'Medium' : 'High';
-  const decision = riskScore <= 68 ? 'Approved' : 'Rejected';
-  const interestRate = decision === 'Approved'
-    ? Math.max(4, Math.min(16, Number((3.2 + riskScore * 0.11).toFixed(1))))
-    : Number((12 + riskScore * 0.06).toFixed(1));
-  return { creditScore, riskScore, riskLevel, interestRate, decision };
+function toRiskLevel(score) {
+  if (score <= 35) return 'Low';
+  if (score <= 65) return 'Medium';
+  return 'High';
+}
+
+function estimateCreditScore(riskScore) {
+  return Math.max(300, Math.min(850, Math.round(850 - riskScore * 5.8)));
 }
 
 export default function RequestLoanPage() {
@@ -30,18 +29,57 @@ export default function RequestLoanPage() {
   const [loanAmount, setLoanAmount] = useState(120);
   const [loanDuration, setLoanDuration] = useState(30);
   const [loading, setLoading] = useState(false);
+  const [requestState, setRequestState] = useState('idle');
   const [result, setResult] = useState(initialResult);
+  const [error, setError] = useState('');
 
   const gaugePosition = useMemo(() => `${Math.max(8, Math.min(92, 100 - result.riskScore))}%`, [result.riskScore]);
   const riskTextColor = result.riskLevel === 'Low' ? 'text-emerald-400' : result.riskLevel === 'Medium' ? 'text-amber-400' : 'text-rose-400';
-  const decisionColor = result.decision === 'Approved' ? 'text-emerald-400' : 'text-rose-400';
+  const decisionColor = result.decision === 'Approved'
+    ? 'text-emerald-400'
+    : result.decision === 'Rejected'
+      ? 'text-rose-400'
+      : 'text-slate-300';
 
   const handleEvaluate = async () => {
     setLoading(true);
-    await new Promise((resolve) => setTimeout(resolve, 1600));
-    setResult(evaluateRisk({ amount: loanAmount, duration: loanDuration, wallet: walletAddress }));
-    setLoading(false);
+    setError('');
+    setRequestState('loading');
+    try {
+      const response = await requestLoan({
+        walletAddress,
+        loanAmount,
+        loanDuration,
+      });
+
+      const decision = toLoanDecisionLabel(response.status);
+      const riskScore = Number(response.risk_score || 0);
+
+      setResult({
+        creditScore: estimateCreditScore(riskScore),
+        riskScore,
+        riskLevel: toRiskLevel(riskScore),
+        interestRate: Number(response.interest_rate || 0),
+        decision,
+        loanId: response.loan_id,
+        transactionHash: response.transaction_hash,
+      });
+      setRequestState('success');
+    } catch (requestError) {
+      setError(requestError.message || 'Failed to process loan request');
+      setRequestState('error');
+    } finally {
+      setLoading(false);
+    }
   };
+
+  const statusMessage = loading
+    ? 'Running AI + on-chain checks...'
+    : requestState === 'success'
+      ? 'Analysis Completed'
+      : requestState === 'error'
+        ? 'Analysis Failed'
+        : 'Ready To Evaluate Risk';
 
   return (
     <>
@@ -68,7 +106,7 @@ export default function RequestLoanPage() {
                       <span>1,000</span>
                     </div>
                   </div>
-                  <div className="rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-center text-lg text-slate-300">USDT</div>
+                  <div className="rounded-xl border border-white/15 bg-white/5 px-4 py-3 text-center text-lg text-slate-300">{loanAmount} USDT</div>
                 </div>
               </div>
 
@@ -88,16 +126,28 @@ export default function RequestLoanPage() {
               <button onClick={handleEvaluate} disabled={loading} className="w-full rounded-xl bg-gradient-to-r from-cyan-400 to-teal-300 px-5 py-3 text-2xl font-semibold text-slate-900 shadow-[0_0_30px_rgba(34,211,238,0.45)] transition hover:scale-[1.01] disabled:opacity-70">
                 Scan Wallet & Evaluate Risk
               </button>
+              {error && <p className="text-sm text-rose-300">{error}</p>}
             </div>
           </div>
         </motion.section>
 
         <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.08 }} className="rounded-2xl border border-white/10 bg-slate-900/25 backdrop-blur-md xl:col-span-3">
           <div className="flex h-full min-h-[380px] flex-col items-center justify-center gap-4 px-4 text-center">
-            <motion.div animate={{ rotate: 360 }} transition={{ duration: 1.3, repeat: Infinity, ease: 'linear' }} className={`${loading ? 'opacity-100' : 'opacity-70'} transition-opacity`}>
-              <LoaderCircle size={58} className="text-cyan-300" />
-            </motion.div>
-            <p className="text-2xl leading-tight text-slate-200">AI Analysis in Progress...</p>
+            {loading ? (
+              <motion.div
+                animate={{ rotate: 360 }}
+                transition={{ duration: 1.3, repeat: Infinity, ease: 'linear' }}
+                className="opacity-100 transition-opacity"
+              >
+                <LoaderCircle size={58} className="text-cyan-300" />
+              </motion.div>
+            ) : requestState === 'success' ? (
+              <CheckCircle2 size={58} className="text-emerald-300" />
+            ) : (
+              <LoaderCircle size={58} className="text-cyan-300/70" />
+            )}
+            <p className="text-2xl leading-tight text-slate-200">{statusMessage}</p>
+            {loading && <p className="text-sm text-slate-400">This may take up to 60-90 seconds.</p>}
           </div>
         </motion.section>
 
@@ -124,6 +174,24 @@ export default function RequestLoanPage() {
                   <p className="text-sm text-slate-300">Loan Decision</p>
                   <p className={`text-6xl font-semibold ${decisionColor}`}>{result.decision}</p>
                 </div>
+                {result.loanId && (
+                  <>
+                    <div className="border-t border-white/15" />
+                    <div>
+                      <p className="text-sm text-slate-300">Loan ID</p>
+                      <p className="text-2xl font-semibold">#{result.loanId}</p>
+                    </div>
+                  </>
+                )}
+                {result.transactionHash && (
+                  <>
+                    <div className="border-t border-white/15" />
+                    <div>
+                      <p className="text-sm text-slate-300">Transaction</p>
+                      <p className="font-mono text-sm text-cyan-300">{result.transactionHash}</p>
+                    </div>
+                  </>
+                )}
               </div>
 
               <div className="relative mx-auto h-full min-h-[510px] w-11 rounded-full border border-white/15 bg-slate-800/70 p-1.5">

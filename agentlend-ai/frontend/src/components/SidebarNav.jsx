@@ -19,7 +19,7 @@ function NavItems({ tabs, activeTab, onTabChange, compact = false }) {
             title={tab.label}
           >
             <Icon size={18} className="opacity-90" />
-            {!compact && <span className="text-[31px] font-medium leading-none" style={{ fontSize: '30px', transform: 'scale(0.5)', transformOrigin: 'left center' }}>{tab.label}</span>}
+            {!compact && <span className="text-[28px] font-medium leading-none" style={{ fontSize: '26px', transform: 'scale(0.5)', transformOrigin: 'left center' }}>{tab.label}</span>}
           </button>
         );
       })}
@@ -45,7 +45,7 @@ export default function SidebarNav({
         }`}
       >
         <div className="flex items-center justify-between border-b border-white/10 px-4 py-4">
-          <h1 className={`bg-gradient-to-r from-cyan-400 via-blue-400 to-purple-500 bg-clip-text font-bold leading-none text-transparent transition-all ${desktopCollapsed ? 'text-xl' : 'text-[32px]'}`}>
+          <h1 className={`bg-gradient-to-r from-cyan-400 via-blue-400 to-purple-500 bg-clip-text font-bold leading-none text-transparent transition-all ${desktopCollapsed ? 'text-lg' : 'text-[28px]'}`}>
             {desktopCollapsed ? 'AL' : 'AgentLend AI'}
           </h1>
           <button
@@ -74,7 +74,7 @@ export default function SidebarNav({
           />
           <aside className="absolute left-0 top-0 h-full w-[280px] border-r border-white/10 bg-slate-950/95 backdrop-blur-xl">
             <div className="flex items-center justify-between border-b border-white/10 px-4 py-5">
-              <h1 className="bg-gradient-to-r from-cyan-400 via-blue-400 to-purple-500 bg-clip-text text-2xl font-bold text-transparent">
+              <h1 className="bg-gradient-to-r from-cyan-400 via-blue-400 to-purple-500 bg-clip-text text-xl font-bold text-transparent">
                 AgentLend AI
               </h1>
               <button

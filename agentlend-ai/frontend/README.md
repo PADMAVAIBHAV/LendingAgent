@@ -18,10 +18,32 @@ Modern fintech dashboard page for **AgentLend AI** built with **React + Tailwind
 ```bash
 cd /home/ravi/LendingAgent/agentlend-ai/frontend
 npm install
+cp .env.example .env
 npm run dev
 ```
 
 Open `http://localhost:5173`.
+
+## Connect to backend
+
+- Frontend reads API URL from `VITE_API_BASE_URL`.
+- Default value in `.env.example` is `http://localhost:8000`.
+- Ensure backend runs before using data-driven tabs.
+
+### Start backend
+
+```bash
+cd /home/ravi/LendingAgent/agentlend-ai/backend
+source .venv/bin/activate
+uvicorn main:app --reload --port 8000
+```
+
+### Start frontend
+
+```bash
+cd /home/ravi/LendingAgent/agentlend-ai/frontend
+npm run dev
+```
 
 ## Build
 

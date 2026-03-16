@@ -1,39 +1,50 @@
+import { useEffect, useMemo, useState } from 'react';
 import { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, Radar, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
-import { motion } from 'framer-motion';
-import { Activity, BriefcaseBusiness, CalendarClock, ChevronDown } from 'lucide-react';
+import { Activity, CalendarClock, ChevronDown } from 'lucide-react';
+import { fetchDecisionLogs, fetchLoans } from '../lib/api';
+import { isDefaultedLoan } from '../lib/loanStatus';
 
-const radarData = [
-  { factor: 'Wallet Age Score', score: 82 },
-  { factor: 'Transaction Activity', score: 78 },
-  { factor: 'Balance Score', score: 71 },
-  { factor: 'Repayment Score', score: 84 },
-  { factor: 'Behavior Score', score: 76 },
+const fallbackRadarData = [
+  { factor: 'Approval Rate', score: 70 },
+  { factor: 'Portfolio Health', score: 74 },
+  { factor: 'Risk Stability', score: 68 },
+  { factor: 'Pricing Fit', score: 66 },
+  { factor: 'Repayment Strength', score: 72 },
 ];
 
-const tokenData = [
-  { m: 'Jan', v: 24 },
-  { m: 'Feb', v: 12 },
-  { m: 'Mar', v: 17 },
-  { m: 'Apr', v: 10 },
-  { m: 'May', v: 35 },
-  { m: 'Jun', v: 22 },
-  { m: 'Dec', v: 8 },
+const fallbackRiskTrend = [
+  { m: 'Jan', v: 28 },
+  { m: 'Feb', v: 32 },
+  { m: 'Mar', v: 35 },
+  { m: 'Apr', v: 30 },
+  { m: 'May', v: 38 },
+  { m: 'Jun', v: 34 },
+  { m: 'Jul', v: 31 },
 ];
 
-const holdingsData = [
-  { t: 'ATL', v: 92 },
-  { t: 'KSD', v: 78 },
-  { t: 'MPI', v: 51 },
-  { t: 'JTC', v: 50 },
-  { t: 'HTK', v: 42 },
-  { t: 'TOK', v: 29 },
+const fallbackTopWallets = [
+  { t: '0xab12', v: 1800 },
+  { t: '0xcd34', v: 1560 },
+  { t: '0xef56', v: 1200 },
+  { t: '0x7812', v: 980 },
+  { t: '0x9a44', v: 840 },
+  { t: '0xbc88', v: 620 },
 ];
 
-const heatRows = [
-  ['Aug', [1, 2, 1, 2, 2, 1, 1, 2, 2, 3, 2, 2, 2, 1]],
-  ['Oct', [2, 1, 2, 2, 1, 2, 3, 2, 1, 2, 2, 3, 1, 1]],
-  ['Nov', [2, 2, 1, 3, 2, 2, 1, 2, 2, 2, 3, 1, 2, 1]],
+const fallbackHeatRows = [
+  ['Jan', [1, 2, 1, 2, 2, 1, 1, 2, 2, 3, 2, 2, 2, 1]],
+  ['Feb', [2, 1, 2, 2, 1, 2, 3, 2, 1, 2, 2, 3, 1, 1]],
+  ['Mar', [2, 2, 1, 3, 2, 2, 1, 2, 2, 2, 3, 1, 2, 1]],
 ];
+
+function clampScore(value) {
+  return Math.max(0, Math.min(100, value));
+}
+
+function shortWallet(wallet) {
+  if (!wallet || wallet.length < 10) return wallet || 'N/A';
+  return `${wallet.slice(0, 6)}...${wallet.slice(-4)}`;
+}
 
 function LeftMetricCard({ title, value, Icon }) {
   return (
@@ -70,21 +81,176 @@ function Card({ title, children, withMore = true }) {
 }
 
 export default function AIRiskAnalysisPage() {
+  const [logs, setLogs] = useState([]);
+  const [loans, setLoans] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function load() {
+      setLoading(true);
+      setError('');
+      try {
+        const [logData, loanData] = await Promise.all([
+          fetchDecisionLogs({ skip: 0, limit: 400 }),
+          fetchLoans({ skip: 0, limit: 400 }),
+        ]);
+        if (!mounted) return;
+        setLogs(logData);
+        setLoans(loanData);
+      } catch (loadError) {
+        if (!mounted) return;
+        setError(loadError.message || 'Failed to load AI risk analysis');
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const {
+    borrowerCount,
+    avgRisk,
+    radarData,
+    riskTrend,
+    topWallets,
+    heatRows,
+    latestExplanation,
+  } = useMemo(() => {
+    const walletSet = new Set();
+    loans.forEach((loan) => walletSet.add(loan.borrower_wallet));
+    logs.forEach((log) => walletSet.add(log.wallet_address));
+
+    const borrowerCount = walletSet.size;
+
+    const riskSeries = logs.length > 0
+      ? logs.map((log) => Number(log.risk_score || 0))
+      : loans.map((loan) => Number(loan.risk_score || 0));
+    const avgRisk = riskSeries.length > 0
+      ? riskSeries.reduce((sum, value) => sum + value, 0) / riskSeries.length
+      : 0;
+
+    const approvedCount = logs.filter((log) => String(log.decision || '').toUpperCase() === 'APPROVED').length;
+    const approvalRate = logs.length > 0 ? (approvedCount / logs.length) * 100 : 0;
+
+    const defaultedCount = loans.filter((loan) => isDefaultedLoan(loan.status)).length;
+    const repaidCount = loans.filter((loan) => String(loan.status || '').toUpperCase() === 'REPAID').length;
+    const defaultRate = loans.length > 0 ? (defaultedCount / loans.length) * 100 : 0;
+    const repaymentRate = loans.length > 0 ? (repaidCount / loans.length) * 100 : 0;
+
+    const variance = riskSeries.length > 0
+      ? riskSeries.reduce((sum, value) => sum + (value - avgRisk) ** 2, 0) / riskSeries.length
+      : 0;
+    const riskStdDev = Math.sqrt(variance);
+
+    const avgInterest = logs.length > 0
+      ? logs.reduce((sum, log) => sum + Number(log.interest_rate || 0), 0) / logs.length
+      : 0;
+
+    const radarData = logs.length > 0 || loans.length > 0
+      ? [
+          { factor: 'Approval Rate', score: clampScore(approvalRate) },
+          { factor: 'Portfolio Health', score: clampScore(100 - defaultRate) },
+          { factor: 'Risk Stability', score: clampScore(100 - riskStdDev * 3) },
+          { factor: 'Pricing Fit', score: clampScore(100 - avgInterest * 3.2) },
+          { factor: 'Repayment Strength', score: clampScore(repaymentRate) },
+        ]
+      : fallbackRadarData;
+
+    const monthlyRisk = new Map();
+    logs.forEach((log) => {
+      const month = new Date(log.timestamp).toLocaleString('en-US', { month: 'short' });
+      const bucket = monthlyRisk.get(month) || { total: 0, count: 0 };
+      bucket.total += Number(log.risk_score || 0);
+      bucket.count += 1;
+      monthlyRisk.set(month, bucket);
+    });
+    const monthOrder = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const riskTrend = monthOrder
+      .filter((month) => monthlyRisk.has(month))
+      .slice(-7)
+      .map((month) => {
+        const value = monthlyRisk.get(month);
+        return {
+          m: month,
+          v: Number((value.total / Math.max(1, value.count)).toFixed(1)),
+        };
+      });
+
+    const loanByWallet = new Map();
+    loans.forEach((loan) => {
+      const wallet = loan.borrower_wallet || 'unknown';
+      loanByWallet.set(wallet, (loanByWallet.get(wallet) || 0) + Number(loan.amount || 0));
+    });
+    const topWallets = [...loanByWallet.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6)
+      .map(([wallet, amount]) => ({ t: shortWallet(wallet), v: Math.round(amount) }));
+
+    const now = new Date();
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const targetMonths = [2, 1, 0].map((offset) => {
+      const date = new Date(now.getFullYear(), now.getMonth() - offset, 1);
+      return { y: date.getFullYear(), m: date.getMonth(), label: monthNames[date.getMonth()] };
+    });
+
+    const heatRows = targetMonths.map(({ y, m, label }) => {
+      const bins = Array.from({ length: 14 }, () => 0);
+      logs.forEach((log) => {
+        const date = new Date(log.timestamp);
+        if (date.getFullYear() !== y || date.getMonth() !== m) return;
+        const dayBin = Math.min(13, Math.floor((date.getDate() - 1) / 2));
+        bins[dayBin] += 1;
+      });
+      const levels = bins.map((count) => {
+        if (count >= 4) return 3;
+        if (count >= 2) return 2;
+        return 1;
+      });
+      return [label, levels];
+    });
+
+    const latestLog = [...logs]
+      .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())[0];
+    const latestExplanation = latestLog
+      ? latestLog.ai_explanation || latestLog.reason || 'No AI explanation available for the latest decision.'
+      : 'No decision logs available yet. Submit a loan request to generate AI analysis details.';
+
+    return {
+      borrowerCount,
+      avgRisk,
+      radarData,
+      riskTrend: riskTrend.length > 0 ? riskTrend : fallbackRiskTrend,
+      topWallets: topWallets.length > 0 ? topWallets : fallbackTopWallets,
+      heatRows: heatRows.some(([, levels]) => levels.some((level) => level > 1)) ? heatRows : fallbackHeatRows,
+      latestExplanation,
+    };
+  }, [logs, loans]);
+
   return (
     <>
       <div className="mb-5">
         <h2 className="text-5xl font-semibold tracking-tight">AI Risk Analysis</h2>
       </div>
 
+      {error && <p className="mb-3 text-sm text-rose-300">{error}</p>}
+      {loading && <p className="mb-3 text-sm text-cyan-300">Loading AI risk analysis...</p>}
+
       <section className="grid gap-4 xl:grid-cols-12">
         <div className="space-y-4 xl:col-span-4">
-          <LeftMetricCard title="Wallet Age" value="3.2 Years" Icon={CalendarClock} />
-          <LeftMetricCard title="Transaction Count" value="1,450+" Icon={Activity} />
+          <LeftMetricCard title="Borrowers Analyzed" value={borrowerCount.toLocaleString()} Icon={CalendarClock} />
+          <LeftMetricCard title="Average Risk Score" value={`${avgRisk.toFixed(1)}/100`} Icon={Activity} />
 
-          <Card title="Token Holdings">
+          <Card title="Top Borrowers by Volume">
             <div className="h-[220px]">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={holdingsData}>
+                <BarChart data={topWallets}>
                   <CartesianGrid stroke="rgba(148,163,184,0.15)" vertical={false} />
                   <XAxis dataKey="t" stroke="#94A3B8" />
                   <YAxis stroke="#94A3B8" />
@@ -110,10 +276,10 @@ export default function AIRiskAnalysisPage() {
         </div>
 
         <div className="space-y-4 xl:col-span-4">
-          <Card title="Token Holdings">
+          <Card title="Monthly Risk Trend">
             <div className="h-[170px]">
               <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={tokenData}>
+                <BarChart data={riskTrend}>
                   <CartesianGrid stroke="rgba(148,163,184,0.15)" vertical={false} />
                   <XAxis dataKey="m" stroke="#94A3B8" />
                   <YAxis stroke="#94A3B8" />
@@ -155,8 +321,7 @@ export default function AIRiskAnalysisPage() {
             </button>
           </div>
           <p className="text-3xl leading-relaxed text-slate-100" style={{ fontSize: '36px', transform: 'scale(0.5)', transformOrigin: 'left top' }}>
-            Approval recommended based on high transaction frequency and strong historical repayment behavior,
-            offset slightly by lower token diversity.
+            {latestExplanation}
           </p>
         </div>
       </section>

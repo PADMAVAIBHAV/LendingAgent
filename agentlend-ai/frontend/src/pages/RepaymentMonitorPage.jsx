@@ -20,8 +20,11 @@ import {
   Link2,
   MinusCircle,
 } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { fetchLoans, fetchTreasuryBalance } from '../lib/api';
+import { isDefaultedLoan, isOutstandingLoan } from '../lib/loanStatus';
 
-const timelineEvents = [
+const fallbackEvents = [
   {
     id: 1,
     type: 'repayment',
@@ -102,7 +105,24 @@ function eventStyles(type) {
   };
 }
 
-function MetricCard({ title, value, icon: Icon, subtitle }) {
+function formatCurrencyCompact(value) {
+  const amount = Number(value || 0);
+  const absAmount = Math.abs(amount);
+
+  if (absAmount >= 1e15) return `$${(amount / 1e15).toFixed(2)}Q`;
+  if (absAmount >= 1e12) return `$${(amount / 1e12).toFixed(2)}T`;
+  if (absAmount >= 1e9) return `$${(amount / 1e9).toFixed(2)}B`;
+  if (absAmount >= 1e6) return `$${(amount / 1e6).toFixed(2)}M`;
+  if (absAmount >= 1e3) return `$${(amount / 1e3).toFixed(2)}K`;
+
+  return `$${amount.toLocaleString()}`;
+}
+
+function formatCurrencyFull(value) {
+  return `$${Number(value || 0).toLocaleString()}`;
+}
+
+function MetricCard({ title, value, icon: Icon, subtitle, fullValue }) {
   return (
     <div className="rounded-2xl border border-transparent bg-gradient-to-br from-cyan-400/55 via-violet-500/35 to-blue-500/55 p-[1px]">
       <div className="rounded-2xl border border-white/10 bg-slate-900/70 p-4 backdrop-blur-xl">
@@ -112,7 +132,10 @@ function MetricCard({ title, value, icon: Icon, subtitle }) {
             <Icon size={16} />
           </div>
         </div>
-        <h3 className="text-4xl font-semibold leading-none">{value}</h3>
+        <h3 className="truncate text-3xl font-semibold leading-tight lg:text-4xl" title={fullValue || value}>{value}</h3>
+        {fullValue && fullValue !== value && (
+          <p className="mt-1 truncate text-xs text-slate-500" title={fullValue}>{fullValue}</p>
+        )}
         {subtitle && <p className="mt-2 text-sm text-slate-300">{subtitle}</p>}
       </div>
     </div>
@@ -120,11 +143,88 @@ function MetricCard({ title, value, icon: Icon, subtitle }) {
 }
 
 export default function RepaymentMonitorPage() {
+  const [loans, setLoans] = useState([]);
+  const [treasury, setTreasury] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function load() {
+      setLoading(true);
+      setError('');
+      try {
+        const [loansData, treasuryData] = await Promise.all([
+          fetchLoans({ skip: 0, limit: 300 }),
+          fetchTreasuryBalance(),
+        ]);
+        if (!mounted) return;
+        setLoans(loansData);
+        setTreasury(treasuryData);
+      } catch (loadError) {
+        if (!mounted) return;
+        setError(loadError.message || 'Failed to load monitor data');
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const timelineEvents = useMemo(() => {
+    if (loans.length === 0) return fallbackEvents;
+
+    const mapped = loans.slice(0, 6).map((loan) => {
+      const status = String(loan.status || '').toUpperCase();
+      const type = status === 'REPAID' ? 'repayment' : isDefaultedLoan(status) ? 'default' : 'issued';
+      const title = type === 'repayment'
+        ? 'Loan Repayment Detected'
+        : type === 'default'
+          ? 'Default Alert'
+          : 'Loan Issued';
+
+      return {
+        id: loan.loan_id,
+        type,
+        title,
+        wallet: loan.borrower_wallet,
+        amount: `$${Number(loan.amount || 0).toLocaleString()} USDT`,
+        txHash: loan.transaction_hash ? loan.transaction_hash.slice(0, 12) : 'N/A',
+        explorer: loan.transaction_hash ? `https://sepolia.etherscan.io/tx/${loan.transaction_hash}` : '#',
+        time: new Date(loan.created_at).toLocaleString(),
+      };
+    });
+
+    return mapped.length > 0 ? mapped : fallbackEvents;
+  }, [loans]);
+
+  const treasuryMetrics = useMemo(() => {
+    const totalLiquidity = Number(treasury?.balance_human || 0);
+    const outstanding = loans
+      .filter((loan) => isOutstandingLoan(loan.status))
+      .reduce((sum, loan) => sum + Number(loan.amount || 0), 0);
+    const capacity = totalLiquidity > 0 ? Math.max(0, 100 - (outstanding / totalLiquidity) * 100) : 0;
+    const utilization = totalLiquidity > 0 ? Math.min(100, (outstanding / totalLiquidity) * 100) : 0;
+    return {
+      totalLiquidity,
+      capacity,
+      utilization,
+    };
+  }, [loans, treasury]);
+
   return (
     <>
       <div className="mb-5">
         <h2 className="text-5xl font-semibold tracking-tight">Repayment Monitor</h2>
       </div>
+
+      {error && <p className="mb-3 text-sm text-rose-300">{error}</p>}
+      {loading && <p className="mb-3 text-sm text-cyan-300">Loading repayment monitor...</p>}
 
       <section className="grid gap-4 xl:grid-cols-12">
         <section className="rounded-2xl border border-transparent bg-gradient-to-br from-cyan-400/55 via-violet-500/35 to-blue-500/55 p-[1px] xl:col-span-5">
@@ -190,11 +290,16 @@ export default function RepaymentMonitorPage() {
 
         <section className="space-y-4 xl:col-span-7">
           <div className="grid gap-4 md:grid-cols-2">
-            <MetricCard title="Total Liquidity" value="$1.2M USDT" icon={Landmark} />
-            <MetricCard title="Lending Capacity" value="81%" subtitle="Gauged against dynamic demand" icon={Gauge} />
+            <MetricCard
+              title="Total Liquidity"
+              value={`${formatCurrencyCompact(treasuryMetrics.totalLiquidity)} USDT`}
+              fullValue={`${formatCurrencyFull(treasuryMetrics.totalLiquidity)} USDT`}
+              icon={Landmark}
+            />
+            <MetricCard title="Lending Capacity" value={`${treasuryMetrics.capacity.toFixed(1)}%`} subtitle="Gauged against dynamic demand" icon={Gauge} />
           </div>
 
-          <MetricCard title="Capital Utilization" value="73%" subtitle="Treasury usage across active loans" icon={CircleDollarSign} />
+          <MetricCard title="Capital Utilization" value={`${treasuryMetrics.utilization.toFixed(1)}%`} subtitle="Treasury usage across active loans" icon={CircleDollarSign} />
 
           <div className="grid gap-4 md:grid-cols-2">
             <section className="rounded-2xl border border-white/10 bg-slate-900/70 p-4 backdrop-blur-xl">

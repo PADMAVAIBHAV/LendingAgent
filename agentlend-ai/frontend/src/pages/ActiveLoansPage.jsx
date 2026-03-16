@@ -1,3 +1,4 @@
+import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import {
   Activity,
@@ -8,63 +9,10 @@ import {
   Wallet,
   WalletCards,
 } from 'lucide-react';
+import { fetchLoans } from '../lib/api';
+import { isActiveLoan, isDefaultedLoan, toLoanStatusLabel } from '../lib/loanStatus';
 
-const loans = [
-  {
-    id: 4021,
-    wallet: '0x3b1e98a7...12af',
-    amount: 5000,
-    interestRate: 4.5,
-    dueDate: 'Oct 28, 2026',
-    lifecycleProgress: 78,
-    repaymentStatus: 'On Track',
-  },
-  {
-    id: 4024,
-    wallet: '0x9ad7b0dc...c8de',
-    amount: 5000,
-    interestRate: 4.5,
-    dueDate: 'Oct 28, 2026',
-    lifecycleProgress: 52,
-    repaymentStatus: 'Near Due',
-  },
-  {
-    id: 4030,
-    wallet: '0x8f2b3bd1...f146',
-    amount: 5000,
-    interestRate: 4.5,
-    dueDate: 'Oct 28, 2026',
-    lifecycleProgress: 34,
-    repaymentStatus: 'Overdue',
-  },
-  {
-    id: 4037,
-    wallet: '0x51cd0a67...9be2',
-    amount: 2800,
-    interestRate: 6.1,
-    dueDate: 'Nov 03, 2026',
-    lifecycleProgress: 69,
-    repaymentStatus: 'On Track',
-  },
-  {
-    id: 4040,
-    wallet: '0x2c96ee43...a4dd',
-    amount: 7400,
-    interestRate: 8.0,
-    dueDate: 'Nov 07, 2026',
-    lifecycleProgress: 46,
-    repaymentStatus: 'Near Due',
-  },
-  {
-    id: 4046,
-    wallet: '0x99af7d8e...7a11',
-    amount: 1500,
-    interestRate: 7.2,
-    dueDate: 'Sep 30, 2026',
-    lifecycleProgress: 18,
-    repaymentStatus: 'Overdue',
-  },
-];
+const seedLoans = [];
 
 function StatCard({ title, value, icon: Icon }) {
   return (
@@ -84,6 +32,28 @@ function StatCard({ title, value, icon: Icon }) {
 
 function formatAmount(amount) {
   return `$${amount.toLocaleString()} USDT`;
+}
+
+function getRepaymentStatus(status, dueDate) {
+  if (isDefaultedLoan(status)) return 'Overdue';
+  if (!dueDate) return 'On Track';
+  const now = new Date();
+  const due = new Date(dueDate);
+  const msLeft = due.getTime() - now.getTime();
+  if (msLeft < 0) return 'Overdue';
+  const daysLeft = msLeft / (1000 * 60 * 60 * 24);
+  if (daysLeft <= 5) return 'Near Due';
+  return 'On Track';
+}
+
+function getLifecycleProgress(createdAt, dueDate) {
+  if (!createdAt || !dueDate) return 50;
+  const start = new Date(createdAt).getTime();
+  const end = new Date(dueDate).getTime();
+  const now = Date.now();
+  if (end <= start) return 50;
+  const progress = ((now - start) / (end - start)) * 100;
+  return Math.max(0, Math.min(100, Math.round(progress)));
 }
 
 function statusStyles(status) {
@@ -116,16 +86,16 @@ function LoanCard({ loan, index }) {
       whileHover={{ y: -5, scale: 1.01 }}
       className="group rounded-2xl border border-transparent bg-gradient-to-br from-cyan-400/60 via-violet-500/40 to-blue-500/60 p-[1px]"
     >
-      <div className="h-full rounded-2xl border border-white/10 bg-slate-900/70 p-5 backdrop-blur-xl transition-colors duration-300 group-hover:bg-slate-900/80">
+      <div className="h-full overflow-hidden rounded-2xl border border-white/10 bg-slate-900/70 p-5 backdrop-blur-xl transition-colors duration-300 group-hover:bg-slate-900/80">
         <div className="mb-4 flex items-start justify-between gap-3">
-          <div>
+          <div className="min-w-0 flex-1">
             <p className="text-sm text-slate-300">Borrower</p>
-            <div className="mt-2 flex items-center gap-2 text-slate-100">
-              <Wallet size={16} className="text-cyan-300" />
-              <span className="font-mono text-sm">{loan.wallet}</span>
+            <div className="mt-2 flex min-w-0 items-center gap-2 text-slate-100">
+              <Wallet size={16} className="shrink-0 text-cyan-300" />
+              <span className="truncate font-mono text-sm">{loan.wallet}</span>
             </div>
           </div>
-          <span className={`rounded-full border px-2.5 py-1 text-xs font-semibold ${styles.badge}`}>
+          <span className={`shrink-0 rounded-full border px-2.5 py-1 text-xs font-semibold ${styles.badge}`}>
             {loan.repaymentStatus}
           </span>
         </div>
@@ -182,16 +152,80 @@ function LoanCard({ loan, index }) {
 }
 
 export default function ActiveLoansPage() {
+  const [loans, setLoans] = useState(seedLoans);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let isMounted = true;
+
+    async function load() {
+      setLoading(true);
+      setError('');
+      try {
+        const data = await fetchLoans({ skip: 0, limit: 200 });
+        const mapped = data
+          .filter((loan) => isActiveLoan(loan.status))
+          .map((loan) => ({
+          id: loan.loan_id,
+          wallet: loan.borrower_wallet,
+          amount: Number(loan.amount || 0),
+          interestRate: Number(loan.interest_rate || 0),
+          dueDate: loan.due_date ? new Date(loan.due_date).toLocaleDateString() : 'N/A',
+          lifecycleProgress: getLifecycleProgress(loan.created_at, loan.due_date),
+          repaymentStatus: getRepaymentStatus(loan.status, loan.due_date),
+          rawStatus: toLoanStatusLabel(loan.status),
+          }));
+
+        if (isMounted) {
+          setLoans(mapped);
+        }
+      } catch (loadError) {
+        if (isMounted) {
+          setError(loadError.message || 'Failed to load loans');
+        }
+      } finally {
+        if (isMounted) {
+          setLoading(false);
+        }
+      }
+    }
+
+    load();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const stats = useMemo(() => {
+    const totalActive = loans.length;
+    const outstanding = loans.reduce((sum, loan) => sum + loan.amount, 0);
+    const avgDaysLeft = loans.length > 0
+      ? Math.round(
+          loans.reduce((sum, loan) => {
+            if (!loan.dueDate || loan.dueDate === 'N/A') return sum;
+            const diff = new Date(loan.dueDate).getTime() - Date.now();
+            return sum + Math.max(0, diff / (1000 * 60 * 60 * 24));
+          }, 0) / loans.length
+        )
+      : 0;
+
+    return { totalActive, outstanding, avgDaysLeft };
+  }, [loans]);
+
   return (
     <>
       <div className="mb-5">
         <h2 className="text-5xl font-semibold tracking-tight">Active Loans</h2>
       </div>
 
+      {error && <p className="mb-3 text-sm text-rose-300">{error}</p>}
+      {loading && <p className="mb-3 text-sm text-cyan-300">Loading active loans...</p>}
+
       <div className="grid gap-4 md:grid-cols-3">
-        <StatCard title="Total Active Loans" value="36" icon={WalletCards} />
-        <StatCard title="Outstanding Amount" value="$18,740 USDT" icon={HandCoins} />
-        <StatCard title="Average Days Left" value="12" icon={Clock3} />
+        <StatCard title="Total Active Loans" value={String(stats.totalActive)} icon={WalletCards} />
+        <StatCard title="Outstanding Amount" value={`$${stats.outstanding.toLocaleString()} USDT`} icon={HandCoins} />
+        <StatCard title="Average Days Left" value={String(stats.avgDaysLeft)} icon={Clock3} />
       </div>
 
       <section className="mt-5 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">

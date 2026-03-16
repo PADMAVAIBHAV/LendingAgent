@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { useEffect } from 'react';
 import {
   ResponsiveContainer,
   AreaChart,
@@ -13,6 +14,8 @@ import {
   Bar,
 } from 'recharts';
 import { Bot, CircleDollarSign, ShieldAlert, Users, Sparkles } from 'lucide-react';
+import { fetchDecisionLogs, fetchLoans, fetchUsers } from '../lib/api';
+import { isDefaultedLoan } from '../lib/loanStatus';
 
 const analyticsByRange = {
   '7 days': {
@@ -134,7 +137,105 @@ function ChartCard({ title, children }) {
 
 export default function AdminAnalyticsPage() {
   const [range, setRange] = useState('30 days');
-  const data = useMemo(() => analyticsByRange[range], [range]);
+  const [apiData, setApiData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function load() {
+      setLoading(true);
+      setError('');
+      try {
+        const [users, loans, logs] = await Promise.all([
+          fetchUsers(),
+          fetchLoans({ skip: 0, limit: 400 }),
+          fetchDecisionLogs({ skip: 0, limit: 400 }),
+        ]);
+
+        if (!mounted) return;
+        setApiData({ users, loans, logs });
+      } catch (loadError) {
+        if (!mounted) return;
+        setError(loadError.message || 'Failed to load admin analytics');
+      } finally {
+        if (mounted) setLoading(false);
+      }
+    }
+
+    load();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  const data = useMemo(() => {
+    if (!apiData) return analyticsByRange[range];
+
+    const now = Date.now();
+    const dayCount = range === '7 days' ? 7 : range === '30 days' ? 30 : 90;
+    const threshold = now - dayCount * 24 * 60 * 60 * 1000;
+
+    const users = apiData.users.filter((user) => new Date(user.created_at).getTime() >= threshold);
+    const loans = apiData.loans.filter((loan) => new Date(loan.created_at).getTime() >= threshold);
+    const logs = apiData.logs.filter((log) => new Date(log.timestamp).getTime() >= threshold);
+
+    const defaultCount = loans.filter((loan) => isDefaultedLoan(loan.status)).length;
+    const avgCreditScore = users.length > 0
+      ? users.reduce((sum, user) => sum + Number(user.credit_score || 0), 0) / users.length
+      : 0;
+    const approvedCount = logs.filter((log) => String(log.decision || '').toUpperCase() === 'APPROVED').length;
+    const approvalRate = logs.length > 0 ? (approvedCount / logs.length) * 100 : 0;
+
+    const usersByBucket = new Map();
+    users.forEach((user) => {
+      const key = new Date(user.created_at).toLocaleDateString();
+      usersByBucket.set(key, (usersByBucket.get(key) || 0) + 1);
+    });
+
+    const loansByBucket = new Map();
+    loans.forEach((loan) => {
+      const key = new Date(loan.created_at).toLocaleDateString();
+      loansByBucket.set(key, (loansByBucket.get(key) || 0) + 1);
+    });
+
+    const lastKeys = [...new Set([...usersByBucket.keys(), ...loansByBucket.keys()])]
+      .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())
+      .slice(-7);
+
+    const userGrowth = lastKeys.map((key) => ({ k: key.slice(0, 5), v: usersByBucket.get(key) || 0 }));
+    const issuance = lastKeys.map((key) => ({ k: key.slice(0, 5), v: loansByBucket.get(key) || 0 }));
+
+    const buckets = [0, 0, 0, 0, 0];
+    loans.forEach((loan) => {
+      const score = Number(loan.risk_score || 0);
+      if (score <= 20) buckets[0] += 1;
+      else if (score <= 40) buckets[1] += 1;
+      else if (score <= 60) buckets[2] += 1;
+      else if (score <= 80) buckets[3] += 1;
+      else buckets[4] += 1;
+    });
+
+    return {
+      metrics: {
+        users: users.length.toLocaleString(),
+        loans: loans.length.toLocaleString(),
+        defaultRate: `${(loans.length > 0 ? (defaultCount / loans.length) * 100 : 0).toFixed(1)}%`,
+        avgCreditScore: avgCreditScore.toFixed(0),
+        approvalRate: `${approvalRate.toFixed(1)}%`,
+      },
+      userGrowth: userGrowth.length > 0 ? userGrowth : analyticsByRange[range].userGrowth,
+      issuance: issuance.length > 0 ? issuance : analyticsByRange[range].issuance,
+      riskDistribution: [
+        { band: '0-20', value: buckets[0] },
+        { band: '21-40', value: buckets[1] },
+        { band: '41-60', value: buckets[2] },
+        { band: '61-80', value: buckets[3] },
+        { band: '81-100', value: buckets[4] },
+      ],
+    };
+  }, [apiData, range]);
   const filters = ['7 days', '30 days', '90 days'];
 
   return (
@@ -157,6 +258,9 @@ export default function AdminAnalyticsPage() {
           ))}
         </div>
       </div>
+
+      {error && <p className="mb-3 text-sm text-rose-300">{error}</p>}
+      {loading && <p className="mb-3 text-sm text-cyan-300">Loading admin analytics...</p>}
 
       <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <MetricCard title="Total Users" value={data.metrics.users} icon={Users} tone="bg-cyan-500/20 text-cyan-300" />
