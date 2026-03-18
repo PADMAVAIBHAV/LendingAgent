@@ -5,11 +5,13 @@ Loads all environment variables and exposes them as typed settings.
 """
 
 from pathlib import Path
+from typing import Any
 from pydantic_settings import (
     BaseSettings,
     PydanticBaseSettingsSource,
     SettingsConfigDict,
 )
+from pydantic import field_validator
 from functools import lru_cache
 
 
@@ -32,6 +34,9 @@ class Settings(BaseSettings):
 
     # ── Database ────────────────────────────────────────────────
     DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/agentlend"
+
+    # ── API / CORS ──────────────────────────────────────────────
+    BACKEND_CORS_ORIGINS: str = "http://localhost:5173,http://127.0.0.1:5173"
 
     # ── AWS Bedrock LLM ────────────────────────────────────────
     AWS_ACCESS_KEY_ID: str = ""
@@ -76,6 +81,23 @@ class Settings(BaseSettings):
     COLD_START_RISK_SCORE: float = 58.0
     COLD_START_INTEREST_RATE: float = 12.0
 
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def normalize_database_url(cls, value: Any) -> Any:
+        """Render Postgres URLs sometimes use postgres://; SQLAlchemy expects postgresql://."""
+        if isinstance(value, str) and value.startswith("postgres://"):
+            return value.replace("postgres://", "postgresql://", 1)
+        return value
+
+    @property
+    def cors_origins_list(self) -> list[str]:
+        raw_value = self.BACKEND_CORS_ORIGINS.strip()
+        if not raw_value:
+            return []
+        if raw_value == "*":
+            return ["*"]
+        return [origin.strip().rstrip("/") for origin in raw_value.split(",") if origin.strip()]
+
     @classmethod
     def settings_customise_sources(
         cls,
@@ -87,8 +109,8 @@ class Settings(BaseSettings):
     ) -> tuple[PydanticBaseSettingsSource, ...]:
         return (
             init_settings,
-            dotenv_settings,
             env_settings,
+            dotenv_settings,
             file_secret_settings,
         )
 
